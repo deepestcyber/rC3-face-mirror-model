@@ -1,0 +1,271 @@
+import matplotlib
+matplotlib.use('Agg')
+import os, sys
+import yaml
+from argparse import ArgumentParser
+from tqdm import tqdm
+
+from functools import partial
+
+import imageio
+import numpy as np
+from skimage.transform import resize
+from skimage import img_as_ubyte
+import skimage
+import torch
+from sync_batchnorm import DataParallelWithCallback
+
+from modules.generator import OcclusionAwareGenerator
+from modules.keypoint_detector import KPDetector
+from animate import normalize_kp
+from scipy.spatial import ConvexHull
+
+import websocket
+try:
+    import thread
+except ImportError:
+    import _thread as thread
+import time
+
+
+if sys.version_info[0] < 3:
+    raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
+
+def load_checkpoints(config_path, checkpoint_path, cpu=False):
+
+    with open(config_path) as f:
+        config = yaml.load(f)
+
+    generator = OcclusionAwareGenerator(**config['model_params']['generator_params'],
+                                        **config['model_params']['common_params'])
+    if not cpu:
+        generator.cuda()
+
+    kp_detector = KPDetector(**config['model_params']['kp_detector_params'],
+                             **config['model_params']['common_params'])
+    if not cpu:
+        kp_detector.cuda()
+
+    if cpu:
+        checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
+    else:
+        checkpoint = torch.load(checkpoint_path)
+
+    generator.load_state_dict(checkpoint['generator'])
+    kp_detector.load_state_dict(checkpoint['kp_detector'])
+
+    if not cpu:
+        generator = DataParallelWithCallback(generator)
+        kp_detector = DataParallelWithCallback(kp_detector)
+
+    generator.eval()
+    kp_detector.eval()
+
+    return generator, kp_detector
+
+import contextlib
+import time
+
+@contextlib.contextmanager
+def timing(name, **kwargs):
+    a = time.time()
+    try:
+        yield
+    finally:
+        pass
+    b = time.time()
+    print(f'{name} took {b-a} seconds')
+
+
+def make_animation(source_image, driving_video, generator, kp_detector, relative=True, adapt_movement_scale=True, cpu=False):
+    with torch.no_grad():
+        predictions = []
+        source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
+        if not cpu:
+            source = source.cuda()
+        driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3)
+        kp_source = kp_detector(source)
+        kp_driving_initial = kp_detector(driving[:, :, 0])
+
+        for frame_idx in tqdm(range(driving.shape[2])):
+            driving_frame = driving[:, :, frame_idx]
+            if not cpu:
+                driving_frame = driving_frame.cuda()
+            with timing('kp_detector'):
+                kp_driving = kp_detector(driving_frame)
+            with timing('normalize_kp'):
+                kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
+                                       kp_driving_initial=kp_driving_initial, use_relative_movement=relative,
+                                       use_relative_jacobian=relative, adapt_movement_scale=adapt_movement_scale)
+            with timing('generator'):
+                out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
+
+            predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
+    return predictions
+
+
+from io import StringIO
+import base64
+import PIL.Image
+from io import BytesIO
+
+class Animator:
+    def __init__(self, source_image, driving_video, cpu=False):
+        """`driving_video` is a misnomer, it is just a list with the first
+        driving frame (as an image)
+        """
+        with torch.no_grad():
+            source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
+            if not cpu:
+                source = source.cuda()
+
+            self.source = source
+            self.kp_source = kp_detector(source)
+
+            driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3)
+            self.kp_driving_initial = kp_detector(driving[:, :, 0])
+
+    def make_animation(
+        self, source_image, driving_video, generator,
+        kp_detector, relative=True, adapt_movement_scale=True, cpu=False,
+    ):
+        with torch.no_grad():
+            predictions = []
+            source = self.source
+            driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3)
+            kp_source = self.kp_source
+            kp_driving_initial = self.kp_driving_initial
+
+            for frame_idx in tqdm(range(driving.shape[2])):
+                driving_frame = driving[:, :, frame_idx]
+                if not cpu:
+                    driving_frame = driving_frame.cuda()
+                with timing('kp_detector'):
+                    kp_driving = kp_detector(driving_frame)
+                with timing('normalize_kp'):
+                    kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
+                                           kp_driving_initial=kp_driving_initial, use_relative_movement=relative,
+                                           use_relative_jacobian=relative, adapt_movement_scale=adapt_movement_scale)
+                with timing('generator'):
+                    out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
+
+                predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
+        return predictions
+
+
+animator = None
+
+def on_message(ws, message):
+    global animator
+    cidx = message.find(b',')
+    print(message[:30], cidx)
+    frame_in_data = message
+    frame_in = base64.b64decode(frame_in_data[cidx:])
+    frame_img = PIL.Image.open(BytesIO(frame_in)).convert('RGBA')
+    frame_in = np.array(frame_img)
+
+    frame_img.save('in.png', 'png')
+
+    driving_frame = resize(frame_in, (256, 256))[..., :3]
+
+    if animator is None:
+        animator = Animator(
+            source_image,
+            [driving_frame],
+            cpu=opt.cpu,
+        )
+
+    predictions = animator.make_animation(
+        source_image,
+        [driving_frame],
+        generator,
+        kp_detector,
+        relative=opt.relative,
+        adapt_movement_scale=opt.adapt_scale,
+        cpu=opt.cpu,
+    )
+
+    """
+    predictions = make_animation(
+        source_image,
+        [driving_frame],
+        generator,
+        kp_detector,
+        relative=opt.relative,
+        adapt_movement_scale=opt.adapt_scale,
+        cpu=opt.cpu,
+    )
+    """
+
+    #imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
+    #print(type(predictions[0]), predictions[0])
+
+    #img = PIL.Image.fromarray(np.uint8(predictions[0])).convert('RGB')
+    img = PIL.Image.fromarray(img_as_ubyte(predictions[0])).convert('RGB')
+
+    img.save('out.png', 'png')
+
+    b = BytesIO()
+    img.save(b, 'png')
+    im_bytes = b.getvalue()
+    frame_out_data = base64.b64encode(im_bytes)
+
+    ws.send(frame_out_data)
+
+def on_error(ws, error):
+    print(error)
+
+def on_close(ws):
+    print("### closed ###")
+
+def on_open(opt, ws):
+    return
+
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--config", required=True, help="path to config")
+    parser.add_argument("--checkpoint", default='vox-cpk.pth.tar', help="path to checkpoint to restore")
+
+    parser.add_argument("--source_image", default='sup-mat/source.png', help="path to source image")
+    parser.add_argument("--driving_video", default='sup-mat/source.png', help="path to driving video")
+    parser.add_argument("--result_video", default='result.mp4', help="path to output")
+
+    parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
+    parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
+
+    parser.add_argument("--find_best_frame", dest="find_best_frame", action="store_true",
+                        help="Generate from the frame that is the most alligned with source. (Only for faces, requires face_aligment lib)")
+
+    parser.add_argument("--best_frame", dest="best_frame", type=int, default=None,
+                        help="Set frame to start from.")
+
+    parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
+
+
+    parser.set_defaults(relative=False)
+    parser.set_defaults(adapt_scale=False)
+
+    opt = parser.parse_args()
+
+    source_image = imageio.imread(opt.source_image)
+    source_image = resize(source_image, (256, 256))[..., :3]
+
+    generator, kp_detector = load_checkpoints(
+        config_path=opt.config,
+        checkpoint_path=opt.checkpoint,
+        cpu=opt.cpu
+    )
+
+    # pip install websocket-client
+    websocket.enableTrace(True)
+    ws = websocket.WebSocketApp(
+        "ws://localhost:8080/registerCompute/test/supersecretsauce",
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+
+    ws.on_open = partial(on_open, opt)
+    ws.run_forever()
