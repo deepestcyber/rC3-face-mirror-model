@@ -1,6 +1,39 @@
+This is a fork of the "First Order Motion Model for Image Animation"
+paper repository. Original README is below.
+
+We added a `serve.py` and modified the Dockerfile to match our
+compute environment.
+
+To start the websocket client, use the following command:
+
+```
+python3 serve.py \
+           --config config/vox-256.yaml \
+           --source_image source.png \
+           --checkpoint vox-adv-cpk.pth.tar \
+           --relative --adapt_scale
+```
+
+It will then connect to the endpoint, register itself as a worker and
+awaits driving images via websocket.
+
+We can register more than one worker (e.g. when using multiple GPUs)
+by doing something like this:
+
+```
+export CUDA_VISIBLE_DEVICES=1
+python3 serve.py \
+		...
+```
+
+where `1` could be any cuda GPU identifier.
+
+---
+
+
 # First Order Motion Model for Image Animation
 
-This repository contains the source code for the paper [First Order Motion Model for Image Animation](https://papers.nips.cc/paper/8935-first-order-motion-model-for-image-animation) by Aliaksandr Siarohin, [Stéphane Lathuilière](http://stelat.eu), [Sergey Tulyakov](http://stulyakov.com), [Elisa Ricci](http://elisaricci.eu/) and [Nicu Sebe](http://disi.unitn.it/~sebe/). 
+This repository contains the source code for the paper [First Order Motion Model for Image Animation](https://papers.nips.cc/paper/8935-first-order-motion-model-for-image-animation) by Aliaksandr Siarohin, [Stéphane Lathuilière](http://stelat.eu), [Sergey Tulyakov](http://stulyakov.com), [Elisa Ricci](http://elisaricci.eu/) and [Nicu Sebe](http://disi.unitn.it/~sebe/).
 
 ## Example animations
 
@@ -66,13 +99,13 @@ docker run -it --rm --gpus all \
        -v $HOME/first-order-model:/app first-order-model \
        python3 demo.py --config config/vox-256.yaml \
            --driving_video driving.mp4 \
-           --source_image source.png  \ 
-           --checkpoint vox-cpk.pth.tar \ 
+           --source_image source.png  \
+           --checkpoint vox-cpk.pth.tar \
            --result_video result.mp4 \
            --relative --adapt_scale
 ```
 
-### Colab Demo 
+### Colab Demo
 We prepare a special demo for the google-colab, see: ```demo-colab.ipynb```.
 
 ### Face-swap
@@ -125,14 +158,14 @@ In this way there are no specific requirements for the driving video and source 
 However this usually leads to poor performance since unrelevant details such as shape is transfered.
 Check animate parameters in ```taichi-256.yaml``` to enable this mode.
 
-<img src="sup-mat/absolute-demo.gif" width="512"> 
+<img src="sup-mat/absolute-demo.gif" width="512">
 
 2) <i>Animation using relative coordinates:</i> from the driving video we first estimate the relative movement of each keypoint,
 then we add this movement to the absolute position of keypoints in the source image.
 This keypoint along with source image is used for animation. This usually leads to better performance, however this requires
 that the object in the first frame of the video and in the source image have the same pose
 
-<img src="sup-mat/relative-demo.gif" width="512"> 
+<img src="sup-mat/relative-demo.gif" width="512">
 
 
 ### Datasets
@@ -143,10 +176,10 @@ that the object in the first frame of the video and in the source image have the
 
 3) **Fashion**. Follow the instruction on dataset downloading [from](https://vision.cs.ubc.ca/datasets/fashion/).
 
-4) **Taichi**. Follow the instructions in [data/taichi-loading](data/taichi-loading/README.md) or instructions from https://github.com/AliaksandrSiarohin/video-preprocessing. 
+4) **Taichi**. Follow the instructions in [data/taichi-loading](data/taichi-loading/README.md) or instructions from https://github.com/AliaksandrSiarohin/video-preprocessing.
 
 5) **Nemo**. Please follow the [instructions](https://www.uva-nemo.org/) on how to download the dataset. Then the dataset should be preprocessed using scripts from https://github.com/AliaksandrSiarohin/video-preprocessing.
- 
+
 6) **VoxCeleb**. Please follow the instruction from https://github.com/AliaksandrSiarohin/video-preprocessing.
 
 

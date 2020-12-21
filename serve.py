@@ -168,6 +168,13 @@ def on_message(ws, message):
 
     driving_frame = resize(frame_in, (256, 256))[..., :3]
 
+    # FIXME: this is problematic as it introduces a dependency on the
+    # sender. for some reason the model wants the keypoints of the
+    # first driving frame and keeps it for further processing.
+    # maybe this is ok and we assign a worker to each user and
+    # we only have a limited amount of possible users. we could
+    # also work around this by introducing a session id which is
+    # then used to get the animator instance for that session.
     if animator is None:
         animator = Animator(
             source_image,
@@ -185,22 +192,6 @@ def on_message(ws, message):
         cpu=opt.cpu,
     )
 
-    """
-    predictions = make_animation(
-        source_image,
-        [driving_frame],
-        generator,
-        kp_detector,
-        relative=opt.relative,
-        adapt_movement_scale=opt.adapt_scale,
-        cpu=opt.cpu,
-    )
-    """
-
-    #imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
-    #print(type(predictions[0]), predictions[0])
-
-    #img = PIL.Image.fromarray(np.uint8(predictions[0])).convert('RGB')
     img = PIL.Image.fromarray(img_as_ubyte(predictions[0])).convert('RGB')
 
     img.save('out.png', 'png')
@@ -229,17 +220,9 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", default='vox-cpk.pth.tar', help="path to checkpoint to restore")
 
     parser.add_argument("--source_image", default='sup-mat/source.png', help="path to source image")
-    parser.add_argument("--driving_video", default='sup-mat/source.png', help="path to driving video")
-    parser.add_argument("--result_video", default='result.mp4', help="path to output")
 
     parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
     parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
-
-    parser.add_argument("--find_best_frame", dest="find_best_frame", action="store_true",
-                        help="Generate from the frame that is the most alligned with source. (Only for faces, requires face_aligment lib)")
-
-    parser.add_argument("--best_frame", dest="best_frame", type=int, default=None,
-                        help="Set frame to start from.")
 
     parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
 

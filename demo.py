@@ -35,23 +35,36 @@ def load_checkpoints(config_path, checkpoint_path, cpu=False):
                              **config['model_params']['common_params'])
     if not cpu:
         kp_detector.cuda()
-    
+
     if cpu:
         checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
     else:
         checkpoint = torch.load(checkpoint_path)
- 
+
     generator.load_state_dict(checkpoint['generator'])
     kp_detector.load_state_dict(checkpoint['kp_detector'])
-    
+
     if not cpu:
         generator = DataParallelWithCallback(generator)
         kp_detector = DataParallelWithCallback(kp_detector)
 
     generator.eval()
     kp_detector.eval()
-    
+
     return generator, kp_detector
+
+import contextlib
+import time
+
+@contextlib.contextmanager
+def timing(name, **kwargs):
+    a = time.time()
+    try:
+        yield
+    finally:
+        pass
+    b = time.time()
+    print(f'{name} took {b-a} seconds')
 
 
 def make_animation(source_image, driving_video, generator, kp_detector, relative=True, adapt_movement_scale=True, cpu=False):
@@ -68,11 +81,14 @@ def make_animation(source_image, driving_video, generator, kp_detector, relative
             driving_frame = driving[:, :, frame_idx]
             if not cpu:
                 driving_frame = driving_frame.cuda()
-            kp_driving = kp_detector(driving_frame)
-            kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
-                                   kp_driving_initial=kp_driving_initial, use_relative_movement=relative,
-                                   use_relative_jacobian=relative, adapt_movement_scale=adapt_movement_scale)
-            out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
+            with timing('kp_detector'):
+                kp_driving = kp_detector(driving_frame)
+            with timing('normalize_kp'):
+                kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
+                                       kp_driving_initial=kp_driving_initial, use_relative_movement=relative,
+                                       use_relative_jacobian=relative, adapt_movement_scale=adapt_movement_scale)
+            with timing('generator'):
+                out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
 
             predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
     return predictions
@@ -110,18 +126,18 @@ if __name__ == "__main__":
     parser.add_argument("--source_image", default='sup-mat/source.png', help="path to source image")
     parser.add_argument("--driving_video", default='sup-mat/source.png', help="path to driving video")
     parser.add_argument("--result_video", default='result.mp4', help="path to output")
- 
+
     parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
     parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
 
-    parser.add_argument("--find_best_frame", dest="find_best_frame", action="store_true", 
+    parser.add_argument("--find_best_frame", dest="find_best_frame", action="store_true",
                         help="Generate from the frame that is the most alligned with source. (Only for faces, requires face_aligment lib)")
 
-    parser.add_argument("--best_frame", dest="best_frame", type=int, default=None,  
+    parser.add_argument("--best_frame", dest="best_frame", type=int, default=None,
                         help="Set frame to start from.")
- 
+
     parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
- 
+
 
     parser.set_defaults(relative=False)
     parser.set_defaults(adapt_scale=False)
