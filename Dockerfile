@@ -20,7 +20,7 @@ RUN pip3 install --upgrade pip
 RUN pip3 install -r requirements.txt
 RUN pip3 install torch==1.7.1+cu110 -f https://download.pytorch.org/whl/torch_stable.html
 
-RUN python3 serve.py \
+CMD python3 serve.py \
            --config config/vox-256.yaml \
            --source_image source.png \
            --checkpoint vox-adv-cpk.pth.tar \
