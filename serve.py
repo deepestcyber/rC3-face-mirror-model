@@ -104,7 +104,6 @@ def make_animation(source_image, driving_video, generator, kp_detector, relative
     return predictions
 
 
-from io import StringIO
 import base64
 import PIL.Image
 from io import BytesIO
@@ -157,6 +156,17 @@ animator = None
 
 def on_message(ws, message):
     global animator
+
+    # when a client is done, reset the worker
+    # to its initial state to receive a new
+    # stream of images; this is only necessary as long
+    # as we assume that one worker == one user.
+    if message == "reset":
+        animator = None
+        return
+
+    # we expect an image encoded as base64 data url,
+    # i.e. b"image:png;base64,<base64data>"
     cidx = message.find(b',')
     print(message[:30], cidx)
     frame_in_data = message
