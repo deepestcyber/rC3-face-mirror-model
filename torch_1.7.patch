@@ -1,0 +1,60 @@
+diff --git a/modules/dense_motion.py b/modules/dense_motion.py
+index 06f7039..0883b25 100644
+--- a/modules/dense_motion.py
++++ b/modules/dense_motion.py
+@@ -74,7 +74,7 @@ class DenseMotionNetwork(nn.Module):
+         source_repeat = source_image.unsqueeze(1).unsqueeze(1).repeat(1, self.num_kp + 1, 1, 1, 1, 1)
+         source_repeat = source_repeat.view(bs * (self.num_kp + 1), -1, h, w)
+         sparse_motions = sparse_motions.view((bs * (self.num_kp + 1), h, w, -1))
+-        sparse_deformed = F.grid_sample(source_repeat, sparse_motions)
++        sparse_deformed = F.grid_sample(source_repeat, sparse_motions, align_corners=True)
+         sparse_deformed = sparse_deformed.view((bs, self.num_kp + 1, -1, h, w))
+         return sparse_deformed
+ 
+diff --git a/modules/generator.py b/modules/generator.py
+index ec66570..1106b80 100644
+--- a/modules/generator.py
++++ b/modules/generator.py
+@@ -54,7 +54,7 @@ class OcclusionAwareGenerator(nn.Module):
+             deformation = deformation.permute(0, 3, 1, 2)
+             deformation = F.interpolate(deformation, size=(h, w), mode='bilinear')
+             deformation = deformation.permute(0, 2, 3, 1)
+-        return F.grid_sample(inp, deformation)
++        return F.grid_sample(inp, deformation, align_corners=True)
+ 
+     def forward(self, source_image, kp_driving, kp_source):
+         # Encoding (downsampling) part
+diff --git a/modules/model.py b/modules/model.py
+index 7ee07c0..c586ea7 100644
+--- a/modules/model.py
++++ b/modules/model.py
+@@ -90,7 +90,7 @@ class Transform:
+         grid = make_coordinate_grid(frame.shape[2:], type=frame.type()).unsqueeze(0)
+         grid = grid.view(1, frame.shape[2] * frame.shape[3], 2)
+         grid = self.warp_coordinates(grid).view(self.bs, frame.shape[2], frame.shape[3], 2)
+-        return F.grid_sample(frame, grid, padding_mode="reflection")
++        return F.grid_sample(frame, grid, padding_mode="reflection", align_corners=True)
+ 
+     def warp_coordinates(self, coordinates):
+         theta = self.theta.type(coordinates.type())
+diff --git a/modules/util.py b/modules/util.py
+index 8ec1d25..6ec0376 100644
+--- a/modules/util.py
++++ b/modules/util.py
+@@ -87,7 +87,7 @@ class UpBlock2d(nn.Module):
+         self.norm = BatchNorm2d(out_features, affine=True)
+ 
+     def forward(self, x):
+-        out = F.interpolate(x, scale_factor=2)
++        out = F.interpolate(x, scale_factor=2, recompute_scale_factor=True)
+         out = self.conv(out)
+         out = self.norm(out)
+         out = F.relu(out)
+@@ -238,6 +238,6 @@ class AntiAliasInterpolation2d(nn.Module):
+ 
+         out = F.pad(input, (self.ka, self.kb, self.ka, self.kb))
+         out = F.conv2d(out, weight=self.weight, groups=self.groups)
+-        out = F.interpolate(out, scale_factor=(self.scale, self.scale))
++        out = F.interpolate(out, scale_factor=(self.scale, self.scale), recompute_scale_factor=True)
+ 
+         return out
