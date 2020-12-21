@@ -129,32 +129,29 @@ class Animator:
         kp_detector, relative=True, adapt_movement_scale=True, cpu=False,
     ):
         with torch.no_grad():
-            predictions = []
             source = self.source
             driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3)
+            if not cpu:
+                driving = driving.cuda()
             kp_source = self.kp_source
             kp_driving_initial = self.kp_driving_initial
 
-            for frame_idx in tqdm(range(driving.shape[2])):
-                driving_frame = driving[:, :, frame_idx]
-                if not cpu:
-                    driving_frame = driving_frame.cuda()
-                with timing('kp_detector'):
-                    kp_driving = kp_detector(driving_frame)
-                with timing('normalize_kp'):
-                    kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
-                                           kp_driving_initial=kp_driving_initial, use_relative_movement=relative,
-                                           use_relative_jacobian=relative, adapt_movement_scale=adapt_movement_scale)
-                with timing('generator'):
-                    out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
+            driving_frame = driving[:, :, 0]
+            with timing('kp_detector'):
+                kp_driving = kp_detector(driving_frame)
+            with timing('normalize_kp'):
+                kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
+                                       kp_driving_initial=kp_driving_initial, use_relative_movement=relative,
+                                       use_relative_jacobian=relative, adapt_movement_scale=adapt_movement_scale)
+            with timing('generator'):
+                out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
 
-                predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
-        return predictions
+            return out['prediction'].permute(0, 2, 3, 1).data.cpu().numpy()
 
 
 animator = None
 
-def on_message(ws, message):
+def on_message_real(ws, message):
     global animator
 
     # when a client is done, reset the worker
@@ -166,7 +163,7 @@ def on_message(ws, message):
         return
 
     # we expect an image encoded as base64 data url,
-    # i.e. b"image:png;base64,<base64data>"
+    # i.e. b"data:image/png;base64,<base64data>"
     cidx = message.find(b',')
     print(message[:30], cidx)
     frame_in_data = message
@@ -174,9 +171,13 @@ def on_message(ws, message):
     frame_img = PIL.Image.open(BytesIO(frame_in)).convert('RGBA')
     frame_in = np.array(frame_img)
 
-    frame_img.save('in.png', 'png')
+    #frame_img.save('in.png', 'png')
 
-    driving_frame = resize(frame_in, (256, 256))[..., :3]
+    # normally we would resize but we make sure that we only get
+    # 256x256 images so we are fine doing just the normalization
+    # and channel selection.
+    #driving_frame = resize(frame_in, (256, 256))[..., :3]
+    driving_frame = frame_in[..., :3] / 255.
 
     # FIXME: this is problematic as it introduces a dependency on the
     # sender. for some reason the model wants the keypoints of the
@@ -204,14 +205,18 @@ def on_message(ws, message):
 
     img = PIL.Image.fromarray(img_as_ubyte(predictions[0])).convert('RGB')
 
-    img.save('out.png', 'png')
+    #img.save('out.jpg', 'jpeg')
 
     b = BytesIO()
-    img.save(b, 'png')
+    img.save(b, 'jpeg')
     im_bytes = b.getvalue()
     frame_out_data = base64.b64encode(im_bytes)
 
     ws.send(frame_out_data)
+
+def on_message(ws, message):
+    with timing('on_message'):
+        on_message_real(ws, message)
 
 def on_error(ws, error):
     print(error)
@@ -252,7 +257,9 @@ if __name__ == "__main__":
     )
 
     # pip install websocket-client
-    websocket.enableTrace(True)
+
+    # debug output when set to true
+    websocket.enableTrace(False)
     ws = websocket.WebSocketApp(
         "ws://localhost:8080/registerCompute/test/supersecretsauce",
         on_message=on_message,
