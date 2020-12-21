@@ -235,6 +235,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", default='vox-cpk.pth.tar', help="path to checkpoint to restore")
 
     parser.add_argument("--source_image", default='sup-mat/source.png', help="path to source image")
+    parser.add_argument("--server", default='ws://localhost:8080', help="address of the frontend")
 
     parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
     parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
@@ -261,7 +262,7 @@ if __name__ == "__main__":
     # debug output when set to true
     websocket.enableTrace(False)
     ws = websocket.WebSocketApp(
-        "ws://localhost:8080/registerCompute/test/supersecretsauce",
+        f"{opt.server}/registerCompute/test/supersecretsauce",
         on_message=on_message,
         on_error=on_error,
         on_close=on_close
