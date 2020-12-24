@@ -225,7 +225,10 @@ def on_close(ws):
     print("### closed ###")
 
 def on_open(opt, ws):
-    return
+    global animator
+    # in case of reconnect, reset the animator
+    # instance that may still be initialized
+    animator = None
 
 
 
@@ -259,14 +262,18 @@ if __name__ == "__main__":
 
     # pip install websocket-client
 
-    # debug output when set to true
-    websocket.enableTrace(False)
-    ws = websocket.WebSocketApp(
-        f"{opt.server}/registerCompute/test/supersecretsauce",
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close
-    )
+    while True:
+        # debug output when set to true
+        websocket.enableTrace(False)
+        ws = websocket.WebSocketApp(
+            f"{opt.server}/registerCompute/test/supersecretsauce",
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close
+        )
 
-    ws.on_open = partial(on_open, opt)
-    ws.run_forever()
+        ws.on_open = partial(on_open, opt)
+        ws.run_forever()
+
+        print("Connection was closed. Retrying in 5 seconds...")
+        time.sleep(5)
